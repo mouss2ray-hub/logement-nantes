@@ -17,14 +17,25 @@ from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"),
-    "Accept-Language": "fr-FR,fr;q=0.9",
-    "Accept": "text/html,application/xhtml+xml",
+                   "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,image/apng,*/*;q=0.8"),
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Referer": "https://www.google.com/",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-User": "?1",
+    "Sec-CH-UA": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
 }
 
 PAP_URL = "https://www.pap.fr/annonce/locations-meuble-nantes-44-g43619-jusqu-a-650-euros-a-partir-de-20-m2"
 IMMOJEUNE_URL = "https://www.immojeune.com/logement-etudiant/nantes-44.html"
 RESIDENCE_URL = "https://www.residenceetudiante.fr/location-etudiant-nantes.html"
+LOCATIONETU_URL = "https://www.location-etudiant.fr/residences-etudiantes-nantes.html"
 MAX_PRICE = 650
 
 
@@ -32,10 +43,19 @@ def esc(s):
     return html.escape(str(s or ""), quote=True)
 
 
-def fetch(url):
-    r = requests.get(url, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    return r.text
+SESSION = requests.Session()
+
+
+def fetch(url, tries=3):
+    last = None
+    for _ in range(tries):
+        try:
+            r = SESSION.get(url, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            return r.text
+        except Exception as e:
+            last = e
+    raise last
 
 
 def first_int(pattern, text):
@@ -103,68 +123,72 @@ def scrape_pap():
     return out[:24]
 
 
-# ------------------------------------------------- Residences (ImmoJeune / ResidenceEtudiante)
-def scrape_residences():
+# ------------------------------------------------- Residences etudiantes (plusieurs sources)
+def name_from_url(url):
+    """Deduit un nom lisible depuis l'URL de la residence (fiable, pas de texte de lien foireux)."""
+    seg = url.rstrip("/").split("/")[-1]
+    seg = re.sub(r"\.html?$", "", seg)
+    seg = re.sub(r"[_-]\d+$", "", seg)          # id de fin (_7428)
+    words = [w for w in re.split(r"[-_]+", seg) if w]
+    drop = {"residence", "residences", "etudiante", "etudiant", "etudiants",
+            "location", "logement", "logements", "la", "le", "les", "de", "du",
+            "des", "a", "nantes", "44"}
+    kept = [w for w in words if w.lower() not in drop] or words
+    name = " ".join(w.capitalize() for w in kept)
+    return name[:46] or "Résidence étudiante"
+
+
+def _scrape_res(url, src, href_pat, base):
     out = []
+    try:
+        soup = BeautifulSoup(fetch(url), "html.parser")
+    except Exception as e:
+        print(f"[{src}] echec:", e)
+        return out
     seen = set()
-    # ImmoJeune
-    try:
-        soup = BeautifulSoup(fetch(IMMOJEUNE_URL), "html.parser")
-        for a in soup.find_all("a", href=re.compile(r"/residence-etudiante/")):
-            href = a.get("href", "")
-            url = href if href.startswith("http") else "https://www.immojeune.com" + href
-            cont = a
-            for _ in range(4):
-                if cont.parent is not None:
-                    cont = cont.parent
+    for a in soup.find_all("a", href=re.compile(href_pat)):
+        href = a.get("href", "")
+        full = href if href.startswith("http") else base + href
+        if full in seen:
+            continue
+        # remonter jusqu'a trouver un prix dans le conteneur de la carte
+        cont, price, surf = a, None, None
+        for _ in range(5):
+            if cont.parent is not None:
+                cont = cont.parent
             txt = cont.get_text(" ", strip=True)
-            price = first_int(r"(\d{3,4})\s*€", txt)
-            if not price or price > MAX_PRICE:
-                continue
-            name = a.get_text(" ", strip=True)[:60] or "Résidence étudiante"
-            key = name.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            surf = first_int(r"(\d{1,3})\s*m", txt)
-            out.append({
-                "id": "res-ij-" + re.sub(r"\W+", "-", key)[:30], "kind": "res", "url": url,
-                "price": f"dès {price} €", "title": name + (f" · {surf} m²" if surf else ""),
-                "spot": "Nantes", "src": "ImmoJeune",
-                "dtype": (f"{surf} m²" if surf else "studio/T1"), "dq": "Nantes", "dm": f"dès {price} €",
-            })
-    except Exception as e:
-        print("[ImmoJeune] echec:", e)
-    # ResidenceEtudiante.fr
-    try:
-        soup = BeautifulSoup(fetch(RESIDENCE_URL), "html.parser")
-        for a in soup.find_all("a", href=re.compile(r"/residence/")):
-            href = a.get("href", "")
-            url = href if href.startswith("http") else "https://www.residenceetudiante.fr" + href
-            cont = a
-            for _ in range(4):
-                if cont.parent is not None:
-                    cont = cont.parent
-            txt = cont.get_text(" ", strip=True)
-            price = first_int(r"(\d{3,4})\s*€", txt)
-            if not price or price > MAX_PRICE:
-                continue
-            name = a.get_text(" ", strip=True)[:60] or "Résidence étudiante"
-            key = name.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            surf = first_int(r"(\d{1,3})\s*m", txt)
-            out.append({
-                "id": "res-re-" + re.sub(r"\W+", "-", key)[:30], "kind": "res", "url": url,
-                "price": f"dès {price} €", "title": name + (f" · {surf} m²" if surf else ""),
-                "spot": "Nantes", "src": "ResidenceEtudiante.fr",
-                "dtype": (f"{surf} m²" if surf else "studio/T1"), "dq": "Nantes", "dm": f"dès {price} €",
-            })
-    except Exception as e:
-        print("[ResidenceEtudiante] echec:", e)
-    print(f"[Residences] {len(out)} retenues")
-    return out[:16]
+            pm = re.search(r"(\d{3,4})\s*€", txt)
+            if pm:
+                price = int(pm.group(1))
+                sm = re.search(r"(\d{1,3})\s*m", txt)
+                surf = int(sm.group(1)) if sm else None
+                break
+        if not price or price > MAX_PRICE:
+            continue
+        seen.add(full)
+        nm = name_from_url(full)
+        out.append({
+            "id": "res-" + re.sub(r"\W+", "-", (src[:3] + nm).lower())[:36],
+            "kind": "res", "url": full, "price": f"dès {price} €",
+            "title": nm + (f" · {surf} m²" if surf else ""), "spot": "Nantes", "src": src,
+            "dtype": (f"studio/T1 {surf} m²" if surf else "studio/T1"),
+            "dq": "Nantes", "dm": f"dès {price} €",
+        })
+    print(f"[{src}] {len(out)} retenues")
+    return out
+
+
+def scrape_residences():
+    raw = []
+    raw += _scrape_res(RESIDENCE_URL, "ResidenceEtudiante.fr", r"/residence/", "https://www.residenceetudiante.fr")
+    raw += _scrape_res(IMMOJEUNE_URL, "ImmoJeune", r"/residence-etudiante/", "https://www.immojeune.com")
+    raw += _scrape_res(LOCATIONETU_URL, "Location-Etudiant.fr", r"residence-etudiante", "https://www.location-etudiant.fr")
+    uniq = {}
+    for d in raw:
+        uniq.setdefault(d["title"].lower(), d)   # dedoublonnage par nom
+    res = list(uniq.values())[:18]
+    print(f"[Residences] total {len(res)}")
+    return res
 
 
 def card(d):
