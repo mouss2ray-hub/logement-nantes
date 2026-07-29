@@ -97,6 +97,8 @@ def scrape_pap():
         if price:
             price = int(re.sub(r"[\s ]", "", str(price)))
         surf = first_int(r"(\d{1,3})\s*m", txt)
+        if surf and surf < 8:
+            surf = None
         if not price or price > MAX_PRICE:
             continue
         coloc = "colocation" in href
@@ -162,6 +164,8 @@ def _scrape_res(url, src, href_pat, base):
                 price = int(pm.group(1))
                 sm = re.search(r"(\d{1,3})\s*m", txt)
                 surf = int(sm.group(1)) if sm else None
+                if surf and surf < 8:
+                    surf = None
                 break
         if not price or price > MAX_PRICE:
             continue
@@ -231,8 +235,16 @@ def build():
     residences_html = section("".join(card(d) for d in residences), len(residences))
     colocs_html = section("".join(card(d) for d in colocs), len(colocs))
 
+    # Liste des sources qui ont REELLEMENT remonte des annonces (pour un affichage honnete)
+    srcs = []
+    for d in studios + residences + colocs:
+        base = d["src"].split(" · ")[0]
+        if base not in srcs:
+            srcs.append(base)
+    sources_str = " · ".join(srcs) if srcs else "aucune source n'a répondu cette fois (réessai au prochain passage)"
+
     html_out = TEMPLATE.format(
-        updated=now,
+        updated=now, sources=sources_str,
         n_studios=len(studios), n_res=len(residences), n_coloc=len(colocs),
         studios=studios_html, residences=residences_html, colocs=colocs_html,
     )
@@ -347,7 +359,7 @@ TEMPLATE = r"""<!DOCTYPE html>
     <div class="fact"><div class="k">Zone</div><div class="v">Campus Tertre</div></div>
     <div class="fact"><div class="k">Échéance</div><div class="v">1<sup>er</sup> septembre</div></div>
   </div>
-  <div class="updated">Annonces au <b>{updated}</b> · sources : PAP · ImmoJeune · ResidenceEtudiante.fr · <b>actualisé automatiquement</b></div>
+  <div class="updated">Annonces au <b>{updated}</b> · collectées sur : {sources} · <b>actualisé automatiquement</b></div>
   <nav class="tabnav"><a href="#annonces">Annonces</a><a href="#alertes">Alertes</a><a href="#quartiers">Quartiers</a><a href="#dossier">Dossier</a><a href="#message">Message</a></nav>
   <div class="howto"><b>Mode d'emploi.</b> En haut : les <b>annonces réelles du moment</b> (mises à jour toutes les 3 h). Sur chaque carte, <b>Message</b> copie une candidature déjà adaptée ; marquez ensuite <b>Lu</b>, <b>Envoyé</b> ou <b>Non</b> (les « Non » sont mis de côté). En bas : le <b>guide</b> — quartiers, dossier, message type, pièges à éviter.</div>
 </div></header>
@@ -374,8 +386,9 @@ TEMPLATE = r"""<!DOCTYPE html>
 
   <section id="alertes">
     <div class="sec-head"><h2>Chercher plus & alertes</h2></div>
-    <div class="note"><b>Leboncoin, Bien'ici et SeLoger bloquent la collecte automatique.</b> Pour eux : ouvrir le lien filtré et activer leur <b>alerte</b> (mail / notification instantanée).
+    <div class="note"><b>Certains sites (PAP, Leboncoin, Bien'ici, SeLoger) bloquent la collecte automatique depuis GitHub.</b> Pour eux : ouvrir le lien filtré et activer leur <b>alerte</b> (mail / notification instantanée) — c'est leur version du temps réel.
       <div class="watch">
+        <a href="https://www.pap.fr/annonce/locations-meuble-nantes-44-g43619-jusqu-a-650-euros-a-partir-de-20-m2" target="_blank" rel="noopener"><div class="t">PAP <span class="arw">↗</span></div><div class="d">Studios de particuliers · à consulter</div></a>
         <a href="https://www.leboncoin.fr/recherche?category=10&locations=Nantes_44000&real_estate_type=2&furnished=1&price=min-650&square=20-max&rooms=1-2" target="_blank" rel="noopener"><div class="t">Leboncoin <span class="arw">↗</span></div><div class="d">Plus gros volume · alerte</div></a>
         <a href="https://www.bienici.com/recherche/location/nantes-44000/appartement?prix-max=650&surface-min=20&meuble=oui" target="_blank" rel="noopener"><div class="t">Bien'ici <span class="arw">↗</span></div><div class="d">Carte · alerte</div></a>
         <a href="https://www.seloger.com/immobilier/locations/immo-nantes-44/" target="_blank" rel="noopener"><div class="t">SeLoger <span class="arw">↗</span></div><div class="d">Agences + particuliers · alerte</div></a>
@@ -459,7 +472,7 @@ Mélissandre Joly
 
 </div>
 
-<footer><div class="wrap">Page actualisée automatiquement (toutes les 3 h). Dernière collecte : {updated}. Sources : PAP · ImmoJeune · ResidenceEtudiante.fr. Guide indicatif — prix et disponibilités évolutifs. Statuts mémorisés sur cet appareil. Site non officiel.</div></footer>
+<footer><div class="wrap">Page actualisée automatiquement (toutes les 3 h). Dernière collecte : {updated}. Sources collectées : {sources}. Guide indicatif — prix et disponibilités évolutifs. Statuts mémorisés sur cet appareil. Site non officiel.</div></footer>
 
 <div id="toast"></div>
 
