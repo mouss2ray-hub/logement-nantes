@@ -1,0 +1,40 @@
+name: Veille logement Nantes
+
+# Quand la collecte se relance :
+on:
+  schedule:
+    - cron: "0 */3 * * *"     # toutes les 3 heures (heure UTC)
+  workflow_dispatch:            # + bouton "Run workflow" pour lancer à la main
+
+permissions:
+  contents: write               # autorise le bot à réécrire index.html
+
+concurrency:
+  group: veille
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt
+
+      - name: Collecter les annonces et générer le site
+        run: python build_site.py
+
+      - name: Publier la nouvelle version
+        run: |
+          git config user.name "veille-bot"
+          git config user.email "veille-bot@users.noreply.github.com"
+          git add index.html
+          git commit -m "MAJ annonces $(date -u +%Y-%m-%dT%H:%MZ)" || echo "Aucun changement"
+          git push
